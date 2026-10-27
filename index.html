@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Salle OdyLink</title>
+<style>
+:root{color-scheme:light dark;--bg:#e6f3ff;--ink:#14213d;--card:#fff;--line:#b9d3ee;--accent:#c8102e;--on-accent:#fff;--glow:#ffc83d;--soft:#5b6b88}
+@media(prefers-color-scheme:dark){:root{--bg:#101a33;--ink:#eaf1ff;--card:#18264a;--line:#2c3f6e;--accent:#ff5a6e;--on-accent:#101a33;--soft:#9db0d6}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 ui-rounded,"Avenir Next Rounded","Trebuchet MS",system-ui,sans-serif;padding:max(16px,env(safe-area-inset-top)) 16px max(16px,env(safe-area-inset-bottom))}
+main{max-width:560px;margin:0 auto;display:grid;gap:16px}
+h1{font-size:1.5rem;margin:0}
+h2{font-size:1rem;margin:0 0 8px}
+p{margin:0}.soft{color:var(--soft);font-size:.9rem}
+section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
+label{display:block;font-weight:600;margin-bottom:6px}
+input,select,button{font:inherit;color:inherit}
+input,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+button{padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card);cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--glow);outline-offset:2px}
+button.main{background:var(--accent);color:var(--on-accent);border-color:var(--accent);font-weight:700}
+button:disabled{opacity:.4;cursor:not-allowed}
+.row{display:flex;gap:8px;flex-wrap:wrap}.row>*{flex:1}
+.modes{display:grid;gap:10px}
+.mode{text-align:left;padding:14px}.mode b{display:block;font-size:1.1rem}.mode small{color:var(--soft)}
+.voices{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.voices button{text-align:left}.voices button[aria-pressed=true]{border:2px solid var(--accent);font-weight:700}
+.who{display:flex;gap:8px;flex-wrap:wrap}
+.badge{padding:8px 12px;border-radius:999px;border:2px solid var(--line);background:var(--bg)}
+.badge small{display:block;color:var(--soft);font-size:.75rem}
+.badge.on{border-color:var(--glow);animation:ring 1s ease-out infinite}
+@keyframes ring{from{box-shadow:0 0 0 0 var(--glow)}to{box-shadow:0 0 0 12px transparent}}
+@media(prefers-reduced-motion:reduce){.badge.on{animation:none;background:var(--glow);color:#14213d}}
+#code{font-size:1.6rem;letter-spacing:.4em;text-align:center}
+#log{list-style:none;margin:0;padding:0;max-height:38vh;overflow:auto;display:grid;gap:6px}
+#log li{padding:6px 10px;border-radius:10px;background:var(--bg)}
+#log b{margin-right:6px}
+.err{color:var(--accent);font-weight:600}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <h1>Salle OdyLink</h1>
+  <p class="soft" id="status">Connexion au relais…</p>
+  <p class="soft" id="diag"></p>
+
+  <section id="modeScreen">
+    <h2>Que veux-tu faire ?</h2>
+    <p class="err" id="modeErr" role="alert"></p>
+    <p class="soft" id="modeInfo"></p>
+    <div class="modes">
+      <button class="mode" id="modeMessages" disabled><b>Envoyer des messages</b><small></small></button>
+      <button class="mode" id="modeImposteur" disabled><b>Imposteur</b><small></small></button>
+      <button class="mode" id="modeProximite" disabled><b>Chat de proximité</b><small></small></button>
+    </div>
+  </section>
+
+  <section id="join" hidden>
+    <h2 id="joinTitle"></h2>
+    <p class="err" id="joinErr" role="alert"></p>
+    <label for="pseudo">Ton pseudo en jeu</label>
+    <select id="pseudo"></select>
+    <div id="voiceBox" style="margin-top:14px">
+      <label>Ta voix (une voix = une personne)</label>
+      <div class="voices" id="voices"></div>
+      <label for="lang" style="margin-top:14px">Langue (micro et lecture)</label>
+      <select id="lang"><option value="fr-FR">Français</option><option value="en-US">English</option><option value="es-ES">Español</option></select>
+    </div>
+    <p class="soft" id="joinInfo" style="margin-top:10px"></p>
+    <div class="row" style="margin-top:14px">
+      <button id="back">Retour</button>
+      <button class="main" id="reqBtn">Recevoir mon code en jeu</button>
+    </div>
+  </section>
+
+  <section id="codeScreen" hidden>
+    <h2>Entre ton code</h2>
+    <p class="soft" style="margin-bottom:10px">Un message privé « [Salle] Code : … » vient d’apparaître dans ton chat en jeu.</p>
+    <p class="err" id="codeErr" role="alert"></p>
+    <input id="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="000000" aria-label="Code à 6 chiffres">
+    <div class="row" style="margin-top:14px">
+      <button id="codeBack">Redemander un code</button>
+      <button class="main" id="verifyBtn">Valider</button>
+    </div>
+  </section>
+
+  <div id="room" hidden style="display:grid;gap:16px">
+    <section id="whoBox"><h2 id="whoTitle">Dans la salle</h2><div class="who" id="who"></div></section>
+    <section>
+      <p class="err" id="roomErr" role="alert"></p>
+      <div id="micRow">
+        <div class="row">
+          <button id="mic" aria-pressed="false">Micro : coupé</button>
+          <button id="mute" aria-pressed="false">Son : activé</button>
+        </div>
+        <p class="soft" id="micInfo" style="margin-top:8px"></p>
+      </div>
+      <div id="proxRow" hidden>
+        <div class="row">
+          <button id="pMic" aria-pressed="true">Micro : actif</button>
+          <button id="pDeaf" aria-pressed="false">Son : activé</button>
+        </div>
+        <p class="soft" id="proxInfo" style="margin-top:8px"></p>
+      </div>
+      <label for="to" style="margin-top:12px">À qui ?</label>
+      <select id="to"></select>
+      <form id="form" class="row" style="margin-top:10px">
+        <input id="text" placeholder="Écris un message" maxlength="160" autocomplete="off" style="flex:3">
+        <button class="main" style="flex:1">Envoyer</button>
+      </form>
+      <p class="soft" id="gameNote" style="margin-top:8px"></p>
+    </section>
+    <section><h2>Messages</h2><ul id="log"></ul></section>
+    <div class="row">
+      <button id="share">Copier le lien de la salle</button>
+      <button id="leave">Quitter</button>
+    </div>
+  </div>
+  <p class="soft">Quiconque a le lien de la salle peut y entrer : ne le partage qu’avec tes amis.</p>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const BROKER = 'wss://broker.hivemq.com:8884/mqtt';
+// Chaque profil : hauteur (pitch), vitesse (rate) et décalage dans la liste des voix de l'appareil.
+const PROFILES = [
+  {n:'Robot grave',p:0.1,r:0.8,v:0},{n:'Petit lutin',p:2,r:1.4,v:1},{n:'Géant lent',p:0.3,r:0.6,v:2},
+  {n:'Speedy',p:1.6,r:1.9,v:0},{n:'Narrateur',p:0.6,r:0.9,v:1},{n:'Souris',p:2,r:1.0,v:2},
+  {n:'Grosse voix',p:0.2,r:1.1,v:1},{n:'Mamie',p:1.3,r:0.7,v:0},{n:'Alien',p:1.8,r:0.6,v:2},
+  {n:'Pressé',p:1.0,r:1.9,v:1},{n:'Zen',p:0.8,r:0.7,v:2},{n:'Écureuil',p:2,r:1.8,v:0}
+];
+const rnd = n => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => b.toString(16).padStart(2, '0')).join('');
+let room = location.hash.slice(1);
+if (!/^[A-Za-z0-9_-]{10,}$/.test(room)) { room = rnd(12); location.hash = room; }
+const base = 'odylink-voice/' + room;
+const myId = rnd(6);
+// La session est gardée dans le navigateur : un rechargement de la page la reprend sans nouveau code.
+const KEY = 'ody_sess_' + room;
+const saved = () => { try { return JSON.parse(localStorage.getItem(KEY)); } catch (e) { return null; } };
+const store = o => { try { if (o) localStorage.setItem(KEY, JSON.stringify(o)); else localStorage.removeItem(KEY); } catch (e) {} };
+const old = (o => o && /^[A-Za-z0-9]{8,64}$/.test(o.sid || '') && ['messages', 'imposteur', 'proximite'].includes(o.mode) && typeof o.pseudo === 'string' ? o : null)(saved());
+let sid = old ? old.sid : rnd(8);   // identifie cette session auprès de l'app
+let resuming = false, resumeTs = 0, tried = false;
+const MODES = ['messages', 'imposteur', 'proximite'];
+let modes = { messages: { on: false, allowed: [] }, imposteur: { on: false, allowed: [] }, proximite: { on: false, allowed: [] } };
+let game = [], gotList = false, who = {}, me = null, mode = null, verified = false;
+let pick = -1, chosen = '', micOn = false, paused = false, muted = false, rec = null;
+const lang = () => $('#lang').value;
+const clean = s => String(s || '').replace(/[\u0000-\u001f]/g, '').trim();
+const showErr = t => document.querySelectorAll('.err').forEach(e => { e.textContent = t || ''; if (!t) $('#joinInfo').textContent = ''; });
+const SCREENS = ['modeScreen', 'join', 'codeScreen', 'room'];
+const showScreen = id => SCREENS.forEach(s => { $('#' + s).hidden = s !== id; });
+
+function renderDiag() {
+  $('#diag').textContent = 'Salle …' + room.slice(-4) + ' · ' + (gotList
+    ? 'liste reçue (' + game.length + ' joueur' + (game.length > 1 ? 's' : '') + ' en jeu)'
+    : 'aucune liste reçue de l’app : ouvre le site avec le lien copié dans l’app');
+}
+renderDiag();
+
+if (typeof mqtt === 'undefined') { $('#status').textContent = 'Impossible de charger le relais (réseau ?). Recharge la page.'; throw new Error('mqtt'); }
+const client = mqtt.connect(BROKER, { clientId: 'ody_' + myId, reconnectPeriod: 2000,
+  will: { topic: base + '/who/' + myId, payload: '', retain: true, qos: 0 } });
+client.on('connect', () => {
+  $('#status').textContent = 'Connecté au relais';
+  client.subscribe([base + '/players', base + '/who/+', base + '/chat', base + '/out/+', base + '/pos', base + '/sig'], () => {
+    if (old && !tried && !verified) { tried = true; tryResume(); }
+  });
+  if (me && mode === 'imposteur') publishWho();
+});
+client.on('close', () => { $('#status').textContent = 'Connexion au relais perdue, nouvel essai…'; });
+client.on('message', (topic, buf) => {
+  const s = buf.toString(), k = topic.slice(base.length + 1);
+  if (k === 'players') onPlayers(s);
+  else if (k.startsWith('who/')) {
+    const id = k.slice(4);
+    if (s) { try { who[id] = JSON.parse(s); } catch (e) {} } else delete who[id];
+    renderJoin(); renderRoom(); checkConflict();
+  } else if (k === 'chat') onChat(s);
+  else if (k === 'pos') onPos(s);
+  else if (k === 'sig') onSig(s);
+  else if (k.startsWith('out/') && k.slice(4) === sid) onReply(s);
+});
+const post = o => client.publish(base + '/in', JSON.stringify(Object.assign({ sid }, o)));
+
+// ---- Liste des joueurs et état des modes, publiés par l'app ----
+function onPlayers(s) {
+  let o; try { o = JSON.parse(s); } catch (e) { o = []; }
+  if (Array.isArray(o)) o = { players: o, modes: {} };
+  game = (o.players || []).map(clean).filter(Boolean).slice(0, 64);
+  MODES.forEach(m => { const d = (o.modes || {})[m] || {}; modes[m] = { on: !!d.on, allowed: (d.allowed || []).map(clean) }; });
+  radius = Number(o.radius) > 0 ? Number(o.radius) : 3000;
+  gotList = true; renderDiag(); renderModes(); renderJoin(); renderTo();
+  if (mode && !modes[mode].on && !verified) leave('Ce mode vient d’être désactivé par l’hôte.');
+}
+function renderModes() {
+  MODES.forEach(m => {
+    const b = $({ messages: '#modeMessages', imposteur: '#modeImposteur', proximite: '#modeProximite' }[m]), d = modes[m];
+    b.disabled = !d.on;
+    b.querySelector('small').textContent = !d.on ? 'Désactivé par l’hôte'
+      : d.allowed.length ? 'Autorisés : ' + d.allowed.join(', ') : 'Activé, aucun joueur autorisé pour l’instant';
+  });
+}
+$('#modeMessages').onclick = () => chooseMode('messages');
+$('#modeImposteur').onclick = () => chooseMode('imposteur');
+$('#modeProximite').onclick = () => chooseMode('proximite');
+function chooseMode(m) {
+  if (!modes[m].on) return;
+  mode = m; showErr('');
+  $('#joinTitle').textContent = { messages: 'Envoyer des messages', imposteur: 'Imposteur', proximite: 'Chat de proximité' }[m];
+  $('#voiceBox').hidden = m !== 'imposteur';
+  showScreen('join'); renderJoin();
+}
+$('#back').onclick = () => { mode = null; showErr(''); showScreen('modeScreen'); };
+
+const others = () => Object.entries(who).filter(([id]) => id !== myId).map(([, w]) => w);
+const publishWho = () => client.publish(base + '/who/' + myId, JSON.stringify(me), { retain: true });
+
+function renderJoin() {
+  if (!mode || verified || $('#join').hidden) return;
+  const imp = mode === 'imposteur', allowed = new Set(modes[mode].allowed);
+  const takenNames = new Set(imp ? others().map(w => w.pseudo) : []);
+  const sel = $('#pseudo'), prev = sel.value;
+  sel.replaceChildren();
+  game.forEach(n => {
+    const label = !allowed.has(n) ? ' (non autorisé)' : takenNames.has(n) ? ' (déjà pris)' : '';
+    const o = new Option(n + label, n); o.disabled = !!label; sel.add(o);
+  });
+  if (!game.length) { const o = new Option('Aucun joueur connecté en jeu', ''); o.disabled = true; sel.add(o); }
+  const ok = [...sel.options].find(o => o.value === prev && !o.disabled) || [...sel.options].find(o => !o.disabled);
+  if (ok) sel.value = ok.value;
+  if (!imp) return;
+  const tv = new Set(others().map(w => w.voice)), box = $('#voices');
+  box.replaceChildren();
+  PROFILES.forEach((p, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = p.n + (tv.has(i) ? ' (prise)' : ''); b.disabled = tv.has(i);
+    b.setAttribute('aria-pressed', String(pick === i));
+    b.onclick = () => { pick = i; renderJoin(); };
+    box.append(b);
+  });
+  if (tv.has(pick)) pick = -1;
+}
+
+// ---- Code envoyé en message privé en jeu ----
+$('#reqBtn').onclick = () => {
+  const name = clean($('#pseudo').value);
+  if (!name) return showErr('Choisis ton pseudo en jeu (un pseudo grisé n’est pas autorisé).');
+  if (mode === 'imposteur' && pick < 0) return showErr('Choisis une voix.');
+  chosen = name; showErr('');
+  $('#joinInfo').textContent = 'Demande envoyée : regarde ton chat en jeu…';
+  try { speechSynthesis.speak(new SpeechSynthesisUtterance(' ')); } catch (e) {}   // débloque la lecture sur iPhone
+  post({ t: 'req', pseudo: name, mode });
+};
+$('#verifyBtn').onclick = () => {
+  const c = clean($('#code').value).replace(/\s/g, '');
+  if (!/^\d{6}$/.test(c)) return showErr('Le code a 6 chiffres.');
+  post({ t: 'verify', code: c });
+};
+$('#codeBack').onclick = () => { showErr(''); showScreen('join'); renderJoin(); };
+function onReply(s) {
+  let r; try { r = JSON.parse(s); } catch (e) { return; }
+  if (r.t === 'code_sent') { showErr(''); showScreen('codeScreen'); $('#code').value = ''; $('#code').focus(); }
+  else if (r.t === 'ok') { resuming = false; enterRoom(); }
+  else if (r.t === 'expired') {
+    resuming = false; store(null); mode = null; sid = rnd(8);
+    $('#modeInfo').textContent = ''; showScreen('modeScreen'); showErr(clean(r.msg));
+  } else if (r.t === 'error') {
+    if (resuming) { resuming = false; mode = null; $('#modeInfo').textContent = ''; showScreen('modeScreen'); }
+    showErr(clean(r.msg));
+  }
+}
+function tryResume() {
+  mode = old.mode; chosen = clean(old.pseudo); pick = Number(old.voice) | 0; resumeTs = Number(old.ts) || 0;
+  resuming = true; $('#modeInfo').textContent = 'Reprise de ta session…';
+  post({ t: 'resume', pseudo: chosen, mode });
+  setTimeout(() => {
+    if (!resuming || verified) return;
+    resuming = false; mode = null;
+    $('#modeInfo').textContent = 'Impossible de reprendre ta session (l’app ne répond pas). Recharge la page ou redemande un code.';
+  }, 6000);
+}
+
+function enterRoom() {
+  verified = true; showErr(''); $('#modeInfo').textContent = '';
+  me = { pseudo: chosen, voice: pick, ts: resumeTs || Date.now() };
+  store({ sid, mode, pseudo: chosen, voice: pick, ts: me.ts });
+  const imp = mode === 'imposteur';
+  const prox = mode === 'proximite';
+  $('#whoBox').hidden = !imp && !prox; $('#micRow').hidden = !imp; $('#proxRow').hidden = !prox;
+  $('#whoTitle').textContent = prox ? 'Autour de toi' : 'Dans la salle';
+  $('#gameNote').textContent = 'Chaque message apparaît dans le chat du jeu avec ton pseudo devant. Choisis « Tout le monde » ou un joueur pour lui écrire en privé' + (imp ? ' (seul lui t’entend avec ta voix).' : '.');
+  renderTo();
+  if (imp) { publishWho(); setupMic(); renderRoom(); }
+  if (prox) {
+    $('#gameNote').textContent = 'Tes messages écrits apparaissent dans le chat du jeu (comme le mode Messages). Ta voix est entendue par les joueurs proches, plus ou moins fort selon la distance.';
+    startProx();
+  }
+  showScreen('room');
+}
+
+// Si quelqu'un a pris la même voix ou le même pseudo juste avant, le plus ancien garde la place.
+function checkConflict() {
+  if (!me || mode !== 'imposteur') return;
+  for (const [id, w] of Object.entries(who)) {
+    if (id === myId) continue;
+    if (w.pseudo === me.pseudo && w.voice === me.voice && w.ts === me.ts) continue;   // ancienne page rechargée
+    if ((w.voice === me.voice || w.pseudo === me.pseudo) && (w.ts < me.ts || (w.ts === me.ts && id < myId))) {
+      return leave('Quelqu’un a pris cette voix ou ce pseudo juste avant toi. Recommence.');
+    }
+  }
+}
+function leave(msg) {
+  if (me && mode === 'imposteur') client.publish(base + '/who/' + myId, '', { retain: true });
+  stopMic(); stopProx(); queue.length = 0; try { speechSynthesis.cancel(); } catch (e) {}
+  me = null; verified = false; pick = -1; mode = null; sid = rnd(8); resumeTs = 0; store(null);
+  showScreen('modeScreen'); renderModes(); showErr(msg || '');
+}
+$('#leave').onclick = () => leave('');
+addEventListener('beforeunload', () => { if (me && mode === 'imposteur') client.publish(base + '/who/' + myId, '', { retain: true }); });
+
+function renderRoom() {
+  if (!me || mode !== 'imposteur') return;
+  const box = $('#who'); box.replaceChildren();
+  Object.entries(who).forEach(([id, w]) => {
+    const d = document.createElement('div'); d.className = 'badge'; d.dataset.id = id;
+    d.textContent = w.pseudo + (id === myId ? ' (toi)' : '');
+    const s = document.createElement('small'); s.textContent = (PROFILES[w.voice] || PROFILES[0]).n; d.append(s);
+    box.append(d);
+  });
+}
+const mark = (id, on) => document.querySelectorAll('.badge').forEach(b => { if (b.dataset.id === id) b.classList.toggle('on', on); });
+
+// Destinataire : tout le monde ou un joueur connecté en jeu (message privé).
+function renderTo() {
+  if (!me) return;
+  const sel = $('#to'), prev = sel.value;
+  sel.replaceChildren(new Option('Tout le monde', ''));
+  game.filter(n => n !== me.pseudo).forEach(n => sel.add(new Option('Privé : ' + n, n)));
+  sel.value = [...sel.options].some(o => o.value === prev) ? prev : '';
+}
+function addLog(m) {
+  const li = document.createElement('li'), b = document.createElement('b');
+  b.textContent = (m.label || m.pseudo) + ' :'; li.append(b, document.createTextNode(m.text));
+  const log = $('#log'); log.append(li);
+  while (log.children.length > 80) log.firstChild.remove();
+  log.scrollTop = log.scrollHeight;
+}
+// Un message écrit ou parlé : il part vers le jeu (via l'app) et, en imposteur, vers les voix des autres.
+function send(text) {
+  text = clean(text).slice(0, 160);
+  if (!text || !me || !verified) return;
+  showErr('');
+  const to = clean($('#to').value);
+  post({ t: 'msg', text, to });
+  if (mode === 'imposteur') {
+    client.publish(base + '/chat', JSON.stringify({ id: myId, pseudo: me.pseudo, voice: me.voice, lang: lang(), text, to, ts: Date.now() }));
+  }
+  addLog({ pseudo: me.pseudo, label: me.pseudo + (to ? ' → ' + to : ''), text });
+}
+function onChat(s) {
+  if (!me || mode !== 'imposteur') return;
+  let m; try { m = JSON.parse(s); } catch (e) { return; }
+  if (!m || m.id === myId || typeof m.text !== 'string') return;
+  m = { id: clean(m.id), pseudo: clean(m.pseudo).slice(0, 24), voice: Number(m.voice) | 0, lang: clean(m.lang) || 'fr-FR', text: clean(m.text).slice(0, 160), to: clean(m.to) };
+  if (!m.text || (m.to && m.to !== me.pseudo)) return;   // message privé pour quelqu'un d'autre
+  addLog({ pseudo: m.pseudo, label: m.pseudo + (m.to ? ' (privé)' : ''), text: m.text });
+  if (!muted) speak(m);
+}
+$('#form').onsubmit = e => { e.preventDefault(); send($('#text').value); $('#text').value = ''; };
+
+// Lecture : chaque message est lu avec la voix de son auteur, sur l'appareil de celui qui écoute.
+const queue = []; let busy = false;
+function speak(m) { queue.push(m); if (queue.length > 6) queue.shift(); if (!busy) next(); }
+function next() {
+  const m = queue.shift();
+  if (!m) { busy = false; paused = false; resumeMic(); return; }
+  busy = true; paused = true; if (rec) try { rec.abort(); } catch (e) {}
+  const p = PROFILES[m.voice] || PROFILES[0], u = new SpeechSynthesisUtterance(m.text);
+  const vs = (speechSynthesis.getVoices() || []).filter(v => v.lang.toLowerCase().startsWith(m.lang.slice(0, 2).toLowerCase()));
+  if (vs.length) u.voice = vs[p.v % vs.length];
+  u.lang = m.lang; u.pitch = p.p; u.rate = p.r;
+  u.onstart = () => mark(m.id, true);
+  u.onend = u.onerror = () => { mark(m.id, false); next(); };
+  speechSynthesis.speak(u);
+}
+$('#mute').onclick = () => {
+  muted = !muted; if (muted) { queue.length = 0; speechSynthesis.cancel(); }
+  $('#mute').textContent = 'Son : ' + (muted ? 'coupé' : 'activé'); $('#mute').setAttribute('aria-pressed', String(muted));
+};
+
+// Micro : le navigateur transcrit ce que tu dis, puis le texte part comme un message écrit.
+function setupMic() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  $('#mic').disabled = !SR;
+  $('#micInfo').textContent = SR ? 'Active le micro : tes phrases seront envoyées en texte, lues avec ta voix. Un casque évite que le jeu soit transcrit.'
+    : 'La reconnaissance vocale n’existe pas sur ce navigateur : utilise la zone de texte (Safari ou Chrome recommandés).';
+}
+function startRec() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR || rec) return;
+  rec = new SR(); rec.lang = lang(); rec.continuous = true; rec.interimResults = false;
+  rec.onresult = e => { for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) send(e.results[i][0].transcript); };
+  rec.onend = () => { rec = null; if (micOn && !paused) setTimeout(startRec, 250); };
+  rec.onerror = e => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { stopMic(); $('#micInfo').textContent = 'Micro refusé : autorise-le dans les réglages du navigateur.'; } };
+  try { rec.start(); } catch (e) { rec = null; }
+}
+function resumeMic() { if (micOn && !rec) startRec(); }
+function stopMic() { micOn = false; if (rec) try { rec.abort(); } catch (e) {} rec = null; $('#mic').textContent = 'Micro : coupé'; $('#mic').setAttribute('aria-pressed', 'false'); }
+$('#mic').onclick = () => {
+  if (micOn) return stopMic();
+  micOn = true; $('#mic').textContent = 'Micro : actif'; $('#mic').setAttribute('aria-pressed', 'true'); startRec();
+};
+$('#share').onclick = async () => {
+  try { await navigator.clipboard.writeText(location.href); $('#share').textContent = 'Lien copié'; }
+  catch (e) { prompt('Copie ce lien :', location.href); }
+};
+// ---- Mode proximité : vraies voix (WebRTC) dont le volume suit la distance en jeu ----
+// L'app publie les positions ; chaque joueur ouvre une connexion directe avec les autres (signalisation par le relais).
+const ICE = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }] };
+let radius = 3000, pos = {}, peers = {}, localStream = null, actx = null, deaf = false;
+const sig = o => client.publish(base + '/sig', JSON.stringify(Object.assign({ from: me.pseudo }, o)));
+
+async function startProx() {
+  deaf = false; peers = {}; pos = {};
+  actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+  $('#proxInfo').textContent = 'Autorise le micro pour parler aux joueurs proches…';
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    $('#pMic').disabled = false;
+  } catch (e) {
+    localStream = new MediaStream(); $('#pMic').disabled = true;
+    $('#proxInfo').textContent = 'Micro refusé : tu entends les autres mais ils ne t’entendent pas (autorise le micro dans le navigateur, puis recharge).';
+  }
+  renderProx();
+}
+function stopProx() {
+  Object.keys(peers).forEach(hang);
+  if (localStream) localStream.getTracks().forEach(t => t.stop());
+  localStream = null; pos = {};
+}
+function hang(n) {
+  const p = peers[n]; if (!p) return;
+  delete peers[n];
+  try { p.pc.close(); } catch (e) {}
+  if (p.audio) { p.audio.srcObject = null; }
+}
+function makePeer(n) {
+  hang(n);
+  const pc = new RTCPeerConnection(ICE), p = peers[n] = { pc, gain: null, audio: null, queue: [], vol: 0 };
+  const tracks = localStream ? localStream.getTracks() : [];
+  if (tracks.length) tracks.forEach(t => pc.addTrack(t, localStream)); else pc.addTransceiver('audio', { direction: 'recvonly' });
+  pc.onicecandidate = e => { if (e.candidate) sig({ to: n, t: 'cand', c: e.candidate }); };
+  pc.ontrack = e => attach(n, e.streams[0]);
+  pc.onconnectionstatechange = () => { if (['failed', 'closed'].includes(pc.connectionState) && peers[n] === p) hang(n); renderProx(); };
+  return pc;
+}
+function attach(n, stream) {
+  const p = peers[n]; if (!p || !stream) return;
+  actx.resume();
+  p.audio = new Audio(); p.audio.srcObject = stream; p.audio.muted = true;   // Chrome ne diffuse un flux WebRTC que s'il est lié à un élément audio
+  p.audio.play().catch(() => {});
+  const g = actx.createGain(); g.gain.value = 0;
+  actx.createMediaStreamSource(stream).connect(g); g.connect(actx.destination);
+  p.gain = g; updateGains();
+}
+async function call(n) {
+  const pc = makePeer(n);
+  try { await pc.setLocalDescription(await pc.createOffer()); sig({ to: n, t: 'offer', sdp: pc.localDescription.sdp }); } catch (e) { hang(n); }
+}
+async function flush(n) { const p = peers[n]; if (!p) return; for (const c of p.queue.splice(0)) { try { await p.pc.addIceCandidate(c); } catch (e) {} } }
+async function onSig(s) {
+  if (mode !== 'proximite' || !me || !localStream) return;
+  let m; try { m = JSON.parse(s); } catch (e) { return; }
+  if (!m || m.to !== me.pseudo || !pos[m.from] || m.from === me.pseudo) return;   // seulement les joueurs de la liste de l'app
+  const n = m.from;
+  try {
+    if (m.t === 'offer') {
+      const pc = makePeer(n);
+      await pc.setRemoteDescription({ type: 'offer', sdp: m.sdp }); await flush(n);
+      await pc.setLocalDescription(await pc.createAnswer());
+      sig({ to: n, t: 'answer', sdp: pc.localDescription.sdp });
+    } else if (m.t === 'answer' && peers[n]) {
+      await peers[n].pc.setRemoteDescription({ type: 'answer', sdp: m.sdp }); await flush(n);
+    } else if (m.t === 'cand' && peers[n]) {
+      if (peers[n].pc.remoteDescription) await peers[n].pc.addIceCandidate(m.c); else peers[n].queue.push(m.c);
+    }
+  } catch (e) {}
+}
+function onPos(s) {
+  if (mode !== 'proximite' || !me || !localStream) return;
+  let o; try { o = JSON.parse(s); } catch (e) { return; }
+  pos = o.p || {};
+  Object.keys(pos).forEach(n => { if (n !== me.pseudo && !peers[n] && me.pseudo < n) call(n); });   // le plus petit pseudo appelle
+  Object.keys(peers).forEach(n => { if (!pos[n]) hang(n); });
+  updateGains();
+}
+// Plein volume tout près, puis décroissance jusqu'à zéro à la portée ; silence dans un autre stage.
+function gainFor(n) {
+  const a = pos[me.pseudo], b = pos[n];
+  if (!a || !b || a[3] !== b[3]) return 0;
+  const d = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]), near = radius * 0.15;
+  if (d <= near) return 1;
+  if (d >= radius) return 0;
+  const t = 1 - (d - near) / (radius - near);
+  return t * t;
+}
+function updateGains() {
+  if (!me) return;
+  Object.entries(peers).forEach(([n, p]) => {
+    p.vol = gainFor(n);
+    if (p.gain) p.gain.gain.setTargetAtTime(deaf ? 0 : p.vol, actx.currentTime, 0.15);
+  });
+  renderProx();
+}
+function renderProx() {
+  if (!me || mode !== 'proximite') return;
+  const box = $('#who'); box.replaceChildren();
+  const add = (label, sub, on) => {
+    const d = document.createElement('div'); d.className = 'badge' + (on ? ' on' : ''); d.textContent = label;
+    const s = document.createElement('small'); s.textContent = sub; d.append(s); box.append(d);
+  };
+  add(me.pseudo + ' (toi)', pos[me.pseudo] ? 'position reçue' : 'position en attente', false);
+  Object.keys(pos).filter(n => n !== me.pseudo).forEach(n => {
+    const p = peers[n], st = !p ? 'pas encore connecté' : !p.gain ? 'connexion…' : (deaf ? 'son coupé' : Math.round(p.vol * 100) + ' %');
+    add(n, st, !!(p && p.gain && p.vol > 0.05 && !deaf));
+  });
+  if (!localStream || !localStream.getTracks().length) return;
+  if (!pos[me.pseudo]) $('#proxInfo').textContent = 'En attente de ta position en jeu (bouge un peu, sois dans un stage)…';
+  else $('#proxInfo').textContent = 'Les voix des joueurs proches s’entendent plus ou moins fort selon la distance. Un casque évite l’écho.';
+}
+$('#pMic').onclick = () => {
+  if (!localStream) return;
+  const on = !localStream.getAudioTracks().some(t => t.enabled);
+  localStream.getAudioTracks().forEach(t => { t.enabled = on; });
+  $('#pMic').textContent = 'Micro : ' + (on ? 'actif' : 'coupé'); $('#pMic').setAttribute('aria-pressed', String(on));
+};
+$('#pDeaf').onclick = () => {
+  deaf = !deaf; $('#pDeaf').textContent = 'Son : ' + (deaf ? 'coupé' : 'activé'); $('#pDeaf').setAttribute('aria-pressed', String(deaf)); updateGains();
+};
+addEventListener('pointerdown', () => { if (actx) actx.resume(); });
+
+// iPhone : la lecture vocale demande un premier appui sur la page, même après un rechargement.
+addEventListener('pointerdown', () => { try { speechSynthesis.speak(new SpeechSynthesisUtterance(' ')); } catch (e) {} }, { once: true });
+renderModes();
+</script>
+</body>
+</html>
