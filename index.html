@@ -113,6 +113,8 @@ summary{cursor:pointer}
           <div><p class="soft" style="margin-bottom:4px">Niveau de mon micro</p><div class="meter" aria-hidden="true"><i id="meterBar"></i></div></div>
           <button id="micTest">Tester mon micro</button>
           <p class="soft" id="testInfo"></p>
+          <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="igOn" style="width:auto"> Entendre les voix en jeu (dans la console) plutôt que sur le site</label>
+          <p class="soft" id="igInfo"></p>
           <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="monOn" style="width:auto"> Retour micro : m’entendre en permanence</label>
           <div><label for="monVol" id="monVolLabel"></label><input id="monVol" type="range" min="0" max="200" step="5"></div>
           <p class="soft">Avec le retour micro, mets un casque, sinon tu auras de l’écho.</p>
@@ -302,6 +304,9 @@ function onReply(s) {
   else if (r.t === 'expired') {
     resuming = false; store(null); mode = null; sid = rnd(8);
     $('#modeInfo').textContent = ''; showScreen('modeScreen'); showErr(clean(r.msg));
+  } else if (r.t === 'ig') {
+    if (r.msg === 'on' || r.msg === 'off') $('#igInfo').textContent = '';
+    else { inGame = false; LS.set('ody_ingame', false); $('#igOn').checked = false; $('#igInfo').textContent = clean(r.msg); updateGains(); }
   } else if (r.t === 'error') {
     if (resuming) { resuming = false; mode = null; $('#modeInfo').textContent = ''; showScreen('modeScreen'); }
     showErr(clean(r.msg));
@@ -348,6 +353,7 @@ function checkConflict() {
   }
 }
 function leave(msg) {
+  if (me && verified && mode === 'proximite' && inGame) post({ t: 'ingame', on: false });
   if (me && verified && mode === 'proximite') post({ t: 'hangup' });
   if (me && (mode === 'imposteur' || mode === 'proximite')) client.publish(base + '/who/' + myId, '', { retain: true });
   stopMic(); stopProx(); queue.length = 0; try { speechSynthesis.cancel(); } catch (e) {}
@@ -474,6 +480,8 @@ const LS = {
 };
 // Réglages gardés sur cet appareil : volume de base de chaque joueur, volume du micro, retour micro.
 let vols = LS.get('ody_vols', {}), micVol = LS.get('ody_micvol', 1), monVol = LS.get('ody_monvol', 0.5), monOn = LS.get('ody_mon', false);
+let inGame = LS.get('ody_ingame', false), igActive = false, encNode = null, pre = [], pend = [], vHang = 0, aseq = 0, volsTimer = null;
+let workletReady = false;
 let testing = false, testTimer = null, micMuted = false, sendProc = false, mg = null, mixDest = null, outEl = null, volTarget = '';
 const userVol = n => (typeof vols[n] === 'number' ? vols[n] : 1);
 // Tout ce qu'on entend passe par un seul élément audio : iOS le garde plus volontiers en vie quand on quitte Safari.
@@ -516,11 +524,14 @@ async function startProx() {
   await Promise.race([turnReady, new Promise(r => setTimeout(r, 3000))]);   // identifiants du relais, si l'app en donne
   if (!me || mode !== 'proximite') { if (localStream) localStream.getTracks().forEach(t => t.stop()); localStream = null; return; }   // quitté pendant la demande du micro
   micMuted = false; sendProc = false; mg = buildMic(); applyMic(); applyMon(); $('#audioBox').hidden = !mg;
+  if (inGame) { post({ t: 'ingame', on: true }); sendVols(); }
+  startEncoder();
   post({ t: 'hb' }); clearInterval(hbTimer);
   hbTimer = setInterval(() => { if (me && verified && mode === 'proximite') post({ t: 'hb' }); }, 10000);   // l'app sait que la page est ouverte
   publishWho(); renderProx(); renderCalls();   // on se signale seulement une fois le micro prêt : les autres peuvent alors nous appeler
 }
 function stopProx() {
+  stopEncoder();
   stopTest(); mg = null; $('#audioBox').hidden = true;
   if (outEl) { outEl.pause(); outEl.srcObject = null; outEl = null; }
   mixDest = null;
@@ -638,11 +649,12 @@ function updateGains() {
     const dir = gainFor(n), ph = phoneGain(n), usePhone = ph > 0 && ph >= dir;
     p.vol = usePhone ? ph : dir; p.phone = usePhone;
     const uv = userVol(n);
-    const d = deaf || usePhone ? 0 : dir * uv, f = deaf || !usePhone ? 0 : ph * PHONE_BOOST * uv;
+    const silent = deaf || inGame;   // en mode « en jeu », c'est la console qui joue les voix
+    const d = silent || usePhone ? 0 : dir * uv, f = silent || !usePhone ? 0 : ph * PHONE_BOOST * uv;
     if (p.gain) {
       p.gain.gain.setTargetAtTime(d, actx.currentTime, 0.15);
       p.pgain.gain.setTargetAtTime(f, actx.currentTime, 0.15);
-    } else if (p.audio) p.audio.volume = Math.max(0, Math.min(1, deaf ? 0 : p.vol * userVol(n)));
+    } else if (p.audio) p.audio.volume = Math.max(0, Math.min(1, deaf || inGame ? 0 : p.vol * userVol(n)));
   });
   renderProx();
 }
@@ -710,11 +722,12 @@ $('#volRange').oninput = e => {
   if (!volTarget) return;
   vols[volTarget] = Number(e.target.value) / 100; LS.set('ody_vols', vols);
   $('#volVal').textContent = e.target.value + ' %'; updateGains();
+  clearTimeout(volsTimer); volsTimer = setTimeout(sendVols, 400);
 };
-$('#volReset').onclick = () => { if (!volTarget) return; delete vols[volTarget]; LS.set('ody_vols', vols); renderCalls(); updateGains(); };
+$('#volReset').onclick = () => { if (!volTarget) return; delete vols[volTarget]; LS.set('ody_vols', vols); renderCalls(); updateGains(); sendVols(); };
 function onCalls(s) {
   let o; try { o = JSON.parse(s); } catch (e) { return; }
-  calls = Array.isArray(o.c) ? o.c : []; callRem = o.rem || {}; callEn = o.en !== false;
+  calls = Array.isArray(o.c) ? o.c : []; callRem = o.rem || {}; callEn = o.en !== false; igActive = !!o.ig;
   updateGains(); renderCalls(); manageRing();
 }
 // Sonnerie discrète (deux tons, faible volume) + vibration ; l'app envoie aussi un message dans le chat du jeu.
@@ -735,6 +748,74 @@ function manageRing() {
   if (ringing && !ringTimer) { ringOnce(); ringTimer = setInterval(ringOnce, 3000); document.title = '📞 Appel · Salle OdyLink'; }
   else if (!ringing) stopRing();
 }
+
+// ---- Voix dans la console ----
+// Le micro est découpé en morceaux de 10 ms (16 kHz mono, 1 octet par échantillon, niveau compandé), comme sur la page du
+// serveur d'origine, et envoyé à l'app uniquement quand quelqu'un écoute en jeu et que tu parles.
+const PCM_WORKLET = `class Pcm extends AudioWorkletProcessor {
+  constructor() { super(); this.step = sampleRate / 16000; this.pos = 0; this.lp = 0; this.n = 0; this.buf = new Uint8Array(160);
+    this.a = 1 - Math.exp(-2 * Math.PI * 6000 / sampleRate); this.k = 1 / Math.log(256); }
+  process(inputs) {
+    const x = inputs[0] && inputs[0][0];
+    if (!x) return true;
+    for (let i = 0; i < x.length; i++) {
+      this.lp += (x[i] - this.lp) * this.a; this.pos += 1;
+      if (this.pos < this.step) continue;
+      this.pos -= this.step;
+      const s = Math.max(-1, Math.min(1, this.lp));
+      const m = Math.round(Math.log(1 + 255 * Math.abs(s)) * this.k * 127);
+      this.buf[this.n++] = (s < 0 ? 0x80 : 0) | m;
+      if (this.n === 160) { this.port.postMessage(this.buf.slice()); this.n = 0; }
+    }
+    return true;
+  }
+}
+registerProcessor('odylink-pcm', Pcm);`;
+async function startEncoder() {
+  if (encNode || !mg || !actx.audioWorklet) return;
+  try {
+    if (!workletReady) {
+      await actx.audioWorklet.addModule(URL.createObjectURL(new Blob([PCM_WORKLET], { type: 'text/javascript' })));
+      workletReady = true;
+    }
+    if (!mg || encNode) return;
+    encNode = new AudioWorkletNode(actx, 'odylink-pcm', { numberOfInputs: 1, numberOfOutputs: 1 });
+    mg.gain.connect(encNode); encNode.connect(out());
+    encNode.port.onmessage = e => onVoiceChunk(new Uint8Array(e.data));
+  } catch (e) { encNode = null; }
+}
+function stopEncoder() {
+  if (encNode) { try { encNode.port.onmessage = null; encNode.disconnect(); } catch (e) {} encNode = null; }
+  pre = []; pend = []; vHang = 0;
+}
+function onVoiceChunk(c) {
+  if (!igActive || !verified || mode !== 'proximite') { pre = []; pend = []; vHang = 0; return; }
+  let peak = 0; for (let i = 0; i < c.length; i++) peak = Math.max(peak, c[i] & 0x7F);
+  if (peak > 22) { if (vHang === 0) { pend = pre.concat(pend); pre = []; } vHang = 25; }   // 250 ms de plus après la dernière voix
+  if (vHang > 0) {
+    vHang--; pend.push(c);
+    if (pend.length >= 5 || vHang === 0) flushVoice();
+  } else {
+    pre.push(c); if (pre.length > 3) pre.shift();
+  }
+}
+function flushVoice() {
+  if (!pend.length) return;
+  const bytes = new Uint8Array(1 + pend.length * 160);
+  bytes[0] = (aseq++) & 0xFF;
+  pend.forEach((ch, i) => bytes.set(ch, 1 + i * 160));
+  pend = [];
+  try { client.publish(base + '/aud/' + sid, typeof Buffer !== 'undefined' ? Buffer.from(bytes) : bytes); } catch (e) {}
+}
+function sendVols() { if (me && verified && mode === 'proximite') post({ t: 'vols', v: vols }); }
+$('#igOn').checked = inGame;
+$('#igOn').onchange = e => {
+  inGame = e.target.checked; LS.set('ody_ingame', inGame);
+  post({ t: 'ingame', on: inGame });
+  if (inGame) sendVols();
+  $('#igInfo').textContent = inGame ? 'Les voix sortent maintenant de la console, plus du site.' : '';
+  updateGains();
+};
 
 // ---- Mon audio ----
 // Au volume 100 %, on envoie le micro tel quel ; sinon il passe par un réglage de volume (WebAudio).
